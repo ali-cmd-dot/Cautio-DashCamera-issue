@@ -4,211 +4,193 @@ import { useEffect, useRef } from "react";
 import { findCityCoords } from "@/lib/cityCoords";
 import { getDangerColor, getDangerGlow, getDangerLabel, getPinSize } from "@/lib/colorUtils";
 
+function getDays(row) {
+  for (const k of Object.keys(row)) {
+    if (k.toLowerCase().replace(/\s+/g," ").trim() === "days pending") {
+      return parseInt(row[k]) || 0;
+    }
+  }
+  return 0;
+}
+
 export default function IndiaMapLeaflet({ cityData, onCityClick, selectedCity }) {
+  const containerRef = useRef(null);
   const mapRef       = useRef(null);
-  const mapInstance  = useRef(null);
   const markersRef   = useRef({});
+  const initRef      = useRef(false);
 
+  // Init map once
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (initRef.current || !containerRef.current) return;
+    initRef.current = true;
 
-    // Dynamically import Leaflet (SSR safe)
-    import("leaflet").then((L) => {
-      // Import CSS once
+    const initMap = async () => {
+      const L = (await import("leaflet")).default;
+
+      // Add Leaflet CSS
       if (!document.getElementById("leaflet-css")) {
-        const link = document.createElement("link");
-        link.id   = "leaflet-css";
-        link.rel  = "stylesheet";
-        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+        const link    = document.createElement("link");
+        link.id       = "leaflet-css";
+        link.rel      = "stylesheet";
+        link.href     = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
         document.head.appendChild(link);
+        await new Promise(r => setTimeout(r, 100));
       }
 
-      if (!mapRef.current || mapInstance.current) return;
+      if (mapRef.current) return;
 
-      // Init map centered on India
-      const map = L.map(mapRef.current, {
-        center: [22.5, 82.5],
-        zoom: 5,
-        zoomControl: true,
+      // Fix container height explicitly
+      containerRef.current.style.height = "100%";
+      containerRef.current.style.width  = "100%";
+
+      const map = L.map(containerRef.current, {
+        center:           [22.5, 78.9629],   // Center of India
+        zoom:             5,
+        zoomControl:      true,
         attributionControl: false,
-        minZoom: 4,
-        maxZoom: 12,
+        minZoom:          4,
+        maxZoom:          12,
+        // Lock to India bounds
+        maxBounds:        [[6, 60], [40, 100]],
+        maxBoundsViscosity: 0.8,
       });
 
-      // Dark CartoDB tile layer
+      // Dark green tile — CartoDB Dark Matter
       L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
         { subdomains: "abcd", maxZoom: 19 }
       ).addTo(map);
 
-      mapInstance.current = map;
-    });
+      // Green tint overlay
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
+        { subdomains: "abcd", maxZoom: 19, opacity: 0.0 }
+      ).addTo(map);
+
+      mapRef.current = map;
+
+      // Force size recalculation
+      setTimeout(() => map.invalidateSize(), 200);
+    };
+
+    initMap();
 
     return () => {
-      if (mapInstance.current) {
-        mapInstance.current.remove();
-        mapInstance.current = null;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current    = null;
+        initRef.current   = false;
       }
     };
   }, []);
 
-  // Update markers when cityData changes
+  // Update markers
   useEffect(() => {
-    if (!mapInstance.current) return;
+    if (!mapRef.current) {
+      const retry = setInterval(() => {
+        if (mapRef.current) {
+          clearInterval(retry);
+          updateMarkers();
+        }
+      }, 200);
+      return () => clearInterval(retry);
+    }
+    updateMarkers();
 
-    import("leaflet").then((L) => {
-      const map = mapInstance.current;
+    async function updateMarkers() {
+      const L   = (await import("leaflet")).default;
+      const map = mapRef.current;
+      if (!map) return;
 
-      // Remove old markers
-      Object.values(markersRef.current).forEach((m) => m.remove());
+      // Clear old markers
+      Object.values(markersRef.current).forEach(m => { try { m.remove(); } catch(e) {} });
       markersRef.current = {};
 
       Object.entries(cityData).forEach(([city, issues]) => {
         const coords = findCityCoords(city);
         if (!coords) return;
 
-        const maxDays    = Math.max(...issues.map((i) => getDays(i)));
+        const maxDays    = Math.max(...issues.map(getDays));
         const color      = getDangerColor(maxDays);
+        const glow       = getDangerGlow(maxDays);
         const size       = getPinSize(issues.length);
         const isCritical = maxDays > 30;
         const isSelected = selectedCity === city;
 
-        // Outer glow circle for critical
+        // Outer pulse ring for critical
         if (isCritical) {
-          const glow = L.circleMarker(coords, {
-            radius:      size + 10,
-            color:       color,
-            fillColor:   color,
-            fillOpacity: 0.08,
-            weight:      0,
-            interactive: false,
+          const ring = L.circleMarker(coords, {
+            radius: size + 12, color, fillColor: color,
+            fillOpacity: 0.07, weight: 1, opacity: 0.3, interactive: false,
           }).addTo(map);
-
-          if (!markersRef.current[`${city}_glow`]) {
-            markersRef.current[`${city}_glow`] = glow;
-          }
+          markersRef.current[`${city}_ring`] = ring;
         }
 
-        // Main circle marker
+        // Main marker
         const marker = L.circleMarker(coords, {
           radius:      size,
           color:       isSelected ? "#ffffff" : color,
-          weight:      isSelected ? 2.5 : 1,
+          weight:      isSelected ? 3 : 1.5,
           fillColor:   color,
-          fillOpacity: 0.88,
+          fillOpacity: 0.85,
         }).addTo(map);
 
-        // Tooltip (hover)
+        // Hover tooltip
         marker.bindTooltip(
           `<div style="
-            background:#0d1525;
+            background:#081508;
             border:1px solid ${color}55;
             border-radius:10px;
             padding:10px 14px;
-            color:#e2e8f0;
-            font-family:DM Sans,sans-serif;
-            min-width:150px;
-            box-shadow:0 4px 20px rgba(0,0,0,0.5)
+            color:#e2f5e8;
+            font-family:Inter,sans-serif;
+            min-width:155px;
+            box-shadow:0 4px 24px rgba(0,0,0,0.6),0 0 20px ${color}15;
           ">
-            <div style="font-weight:700;font-size:13px;margin-bottom:5px">📍 ${city}</div>
-            <div style="font-size:11px;color:#64748b;margin-bottom:3px">
-              ${issues.length} issue${issues.length !== 1 ? "s" : ""}
+            <div style="font-weight:700;font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:6px">
+              <span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;box-shadow:0 0 6px ${color}"></span>
+              ${city}
             </div>
-            <div style="display:inline-block;background:${color};color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;margin-bottom:3px">
-              ${getDangerLabel(maxDays)}
+            <div style="font-size:11px;color:#4a7a5a;margin-bottom:5px">
+              ${issues.length} unresolved issue${issues.length !== 1 ? "s" : ""}
             </div>
-            <div style="font-size:11px;color:${color};font-family:monospace">
-              Max: ${maxDays}d pending
+            <div style="display:inline-block;background:${color}22;color:${color};border:1px solid ${color}44;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:0.05em">
+              ${getDangerLabel(maxDays)} · ${maxDays}d
             </div>
           </div>`,
-          {
-            permanent:   false,
-            direction:   "top",
-            offset:      [0, -size - 4],
-            opacity:     1,
-            className:   "leaflet-tooltip-dark",
-          }
+          { permanent: false, direction: "top", offset: [0, -size - 4], opacity: 1, className: "leaflet-tooltip-cautio" }
         );
 
-        // Count label on marker
-        const icon = L.divIcon({
-          html: `<div style="
-            width:${size * 2}px;
-            height:${size * 2}px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            color:rgba(255,255,255,0.95);
-            font-size:${Math.max(size * 0.75, 8)}px;
-            font-weight:700;
-            font-family:'JetBrains Mono',monospace;
-            pointer-events:none;
-            margin-top:-${size}px;
-            margin-left:-${size}px;
-          ">${issues.length > 1 ? issues.length : ""}</div>`,
-          className:   "",
-          iconSize:    [0, 0],
-          iconAnchor:  [0, 0],
-        });
-
-        const labelMarker = L.marker(coords, { icon, interactive: false }).addTo(map);
+        // Count label
+        if (issues.length > 0) {
+          const icon = L.divIcon({
+            html: `<div style="
+              color:rgba(255,255,255,0.95);
+              font-size:${Math.max(Math.floor(size * 0.75), 7)}px;
+              font-weight:800;
+              font-family:'JetBrains Mono',monospace;
+              text-align:center;
+              line-height:1;
+              pointer-events:none;
+              text-shadow:0 1px 3px rgba(0,0,0,0.8);
+            ">${issues.length}</div>`,
+            className:  "",
+            iconSize:   [size * 2, size * 2],
+            iconAnchor: [size, size],
+          });
+          const lbl = L.marker(coords, { icon, interactive: false, zIndexOffset: 1000 }).addTo(map);
+          markersRef.current[`${city}_lbl`] = lbl;
+        }
 
         marker.on("click", () => onCityClick(city));
-
-        markersRef.current[city]              = marker;
-        markersRef.current[`${city}_label`]  = labelMarker;
+        markersRef.current[city] = marker;
       });
-    });
+    }
   }, [cityData, selectedCity, onCityClick]);
 
   return (
     <div className="relative w-full h-full">
-      <div ref={mapRef} className="w-full h-full" />
-
-      {/* Custom tooltip CSS */}
-      <style>{`
-        .leaflet-tooltip-dark {
-          background: transparent !important;
-          border: none !important;
-          box-shadow: none !important;
-          padding: 0 !important;
-        }
-        .leaflet-tooltip-dark::before { display: none !important; }
-        .leaflet-control-zoom {
-          border: 1px solid #1e3a5f !important;
-          border-radius: 8px !important;
-          overflow: hidden;
-        }
-        .leaflet-control-zoom a {
-          background: rgba(13,21,37,0.95) !important;
-          color: #94a3b8 !important;
-          border-color: #1e3a5f !important;
-        }
-        .leaflet-control-zoom a:hover {
-          background: #1e3a5f !important;
-          color: #e2e8f0 !important;
-        }
-        .leaflet-container {
-          background: #060b12 !important;
-          font-family: 'DM Sans', sans-serif;
-        }
-      `}</style>
+      <div ref={containerRef} style={{ width: "100%", height: "100%", minHeight: "400px" }} />
     </div>
   );
-}
-
-// Helper — Days Pending column robust read
-function getDays(row) {
-  // Try multiple possible column names
-  const keys = ["Days Pending", "days pending", "Days pending", "DAYS PENDING", "DaysPending"];
-  for (const k of keys) {
-    if (row[k] !== undefined && row[k] !== "") return parseInt(row[k]) || 0;
-  }
-  // Fallback: find any key containing "days" and "pending"
-  for (const k of Object.keys(row)) {
-    if (k.toLowerCase().includes("days") && k.toLowerCase().includes("pending")) {
-      return parseInt(row[k]) || 0;
-    }
-  }
-  return 0;
 }
