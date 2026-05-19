@@ -22,7 +22,16 @@ const IndiaMap = dynamic(() => import("@/components/IndiaMapLeaflet"), {
 
 function getDays(row) {
   for (const k of Object.keys(row)) {
-    if (k.toLowerCase().replace(/\s+/g," ").trim() === "days pending") return parseInt(row[k]) || 0;
+    const clean = k.toLowerCase().replace(/[^a-z]/g, "");
+    if (clean === "dayspending" || clean === "daypending") {
+      return parseInt(row[k].toString().replace(/[^0-9]/g, "")) || 0;
+    }
+  }
+  for (const k of Object.keys(row)) {
+    const kl = k.toLowerCase();
+    if (kl.includes("day") && kl.includes("pend")) {
+      return parseInt(row[k].toString().replace(/[^0-9]/g, "")) || 0;
+    }
   }
   return 0;
 }
